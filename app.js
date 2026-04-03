@@ -78,7 +78,18 @@ function renderSearchResults(products) {
 }
 
 // --- 3. Barcode Scanner ---
-startScanBtn.addEventListener('click', () => {
+startScanBtn.addEventListener('click', async () => {
+  // Explicitly prompt the Android/iOS OS for camera permissions first
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "environment" } });
+    // Instantly stop the stream since we just needed to trigger the permission prompt
+    stream.getTracks().forEach(track => track.stop());
+  } catch (err) {
+    alert("Camera permission is required to scan barcodes. Please enable it in your phone settings.");
+    console.warn("Camera access denied or unavailable:", err);
+    return; // Stop the scanner from opening if permission is denied
+  }
+
   scannerModal.classList.remove('hidden');
   html5QrcodeScanner = new Html5Qrcode("reader");
   html5QrcodeScanner.start(
