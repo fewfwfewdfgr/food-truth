@@ -32,13 +32,21 @@
         
         <div class="camera-overlay-top">
           <button class="icon-btn close-cam round-btn-dark"><i class="ri-close-line"></i></button>
+          
+          <div class="camera-mode-toggle">
+            <button id="modeBarcodeBtn" class="mode-btn active-mode">Barcode <i class="ri-barcode-line"></i></button>
+            <button id="modeOCRBtn" class="mode-btn">Photo <i class="ri-text"></i></button>
+          </div>
+
           <button class="icon-btn flash-cam round-btn-dark"><i class="ri-flashlight-fill"></i></button>
         </div>
 
-        <div class="camera-instructions">
+        <div class="camera-instructions" id="cameraInstructions">
           <span class="badge-feature"><i class="ri-sparkle-fill" style="color: #facc15;"></i> NEW FEATURE</span>
           <p>Take a photo of the ingredients to get your scan result</p>
         </div>
+
+        <div id="barcodeReader" class="hidden"></div>
 
         <div class="shutter-container">
           <button id="captureBtn" class="shutter-btn">
@@ -89,6 +97,8 @@
     <canvas id="snapshotCanvas" class="hidden"></canvas>
   </div>
 
+  <!-- Barcode Scanner Library -->
+  <script src="https://unpkg.com/html5-qrcode" type="text/javascript"></script>
   <!-- Tesseract OCR Library -->
   <script src='https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js'></script>
   

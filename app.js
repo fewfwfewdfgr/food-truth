@@ -1,4 +1,4 @@
-// --- Modern OCR Ingredient Scanner App Logic ---
+// --- Modern OCR & Barcode Ingredient Scanner Logic ---
 
 // DOM Elements
 const viewCamera = document.getElementById('view-camera');
@@ -8,13 +8,22 @@ const topHeader = document.getElementById('topHeader');
 const cameraSource = document.getElementById('cameraSource');
 const snapshotCanvas = document.getElementById('snapshotCanvas');
 const captureBtn = document.getElementById('captureBtn');
+const cameraInstructions = document.getElementById('cameraInstructions');
+
+const barcodeReader = document.getElementById('barcodeReader');
+const modeBarcodeBtn = document.getElementById('modeBarcodeBtn');
+const modeOCRBtn = document.getElementById('modeOCRBtn');
+
 const loadingOverlay = document.getElementById('loadingOverlay');
+const loadingMsg = document.getElementById('loadingMsg');
 const reportContent = document.getElementById('report-content');
 const backBtn = document.getElementById('backBtn');
 
 let mediaStream = null;
+let currentMode = 'barcode'; // 'barcode' or 'ocr'
+let html5QrcodeScanner = null;
 
-// --- 1. View & Camera Management ---
+// --- 1. View & Mode Management ---
 function switchView(viewId) {
   document.querySelectorAll('.view').forEach(v => v.classList.add('hidden'));
   document.getElementById(viewId).classList.remove('hidden');
@@ -26,27 +35,79 @@ function switchView(viewId) {
   }
 }
 
-async function initCamera() {
-  switchView('view-camera');
-  if (mediaStream) return; // already running
-
-  try {
-    mediaStream = await navigator.mediaDevices.getUserMedia({ 
-      video: { facingMode: "environment", focusMode: "continuous" } 
-    });
-    cameraSource.srcObject = mediaStream;
-  } catch (err) {
-    alert("Camera access is required for OCR scanning.");
-    console.error(err);
-  }
-}
-
 function stopCamera() {
   if (mediaStream) {
     mediaStream.getTracks().forEach(track => track.stop());
     mediaStream = null;
   }
+  if (html5QrcodeScanner) {
+    html5QrcodeScanner.stop().catch(()=>{});
+    html5QrcodeScanner.clear();
+    html5QrcodeScanner = null;
+  }
 }
+
+async function initCamera() {
+  switchView('view-camera');
+  stopCamera(); // reset all
+  
+  if (currentMode === 'ocr') {
+    modeBarcodeBtn.classList.remove('active-mode');
+    modeOCRBtn.classList.add('active-mode');
+    
+    barcodeReader.classList.add('hidden');
+    cameraSource.classList.remove('hidden');
+    captureBtn.parentElement.classList.remove('hidden');
+    cameraInstructions.style.visibility = 'visible';
+    
+    try {
+      mediaStream = await navigator.mediaDevices.getUserMedia({ 
+        video: { facingMode: "environment", focusMode: "continuous" } 
+      });
+      cameraSource.srcObject = mediaStream;
+    } catch (err) {
+      alert("Camera access is required for OCR scanning.");
+      console.error(err);
+    }
+  } else {
+    // Barcode Mode
+    modeOCRBtn.classList.remove('active-mode');
+    modeBarcodeBtn.classList.add('active-mode');
+    
+    cameraSource.classList.add('hidden');
+    captureBtn.parentElement.classList.add('hidden');
+    cameraInstructions.style.visibility = 'hidden';
+    barcodeReader.classList.remove('hidden');
+    
+    html5QrcodeScanner = new Html5Qrcode("barcodeReader");
+    html5QrcodeScanner.start(
+      { facingMode: "environment" },
+      { fps: 10, qrbox: { width: 250, height: 250 } },
+      (decodedText) => {
+        if (html5QrcodeScanner.isProcessing) return;
+        html5QrcodeScanner.isProcessing = true;
+        fetchProductDetails(decodedText);
+      },
+      (error) => {} // ignore
+    ).catch(err => {
+      console.error("Camera permissions required", err);
+      alert("Please allow camera permission.");
+    });
+  }
+}
+
+// Mode Buttons
+modeBarcodeBtn.addEventListener('click', () => {
+  if(currentMode === 'barcode') return;
+  currentMode = 'barcode';
+  initCamera();
+});
+
+modeOCRBtn.addEventListener('click', () => {
+  if(currentMode === 'ocr') return;
+  currentMode = 'ocr';
+  initCamera();
+});
 
 // Start camera initially
 window.addEventListener('load', initCamera);
@@ -57,9 +118,38 @@ backBtn.addEventListener('click', () => {
   initCamera();
 });
 
-// --- 2. Snapshot & Tesseract OCR ---
+// --- 2. Live Scans (Barcode API & OCR) ---
+
+// a) Barcode Flow
+async function fetchProductDetails(barcode) {
+  stopCamera();
+  switchView('view-report');
+  topHeader.classList.add('hidden');
+  loadingMsg.innerText = "Fetching Open Food Facts API...";
+  loadingOverlay.classList.remove('hidden');
+  
+  try {
+    const res = await fetch(`https://world.openfoodfacts.org/api/v0/product/${barcode}.json`);
+    const data = await res.json();
+    if (data.status === 1) {
+      const text = data.product.ingredients_text || "water, unknown ingredient"; // mock if empty
+      analyzeIngredients(text);
+    } else {
+      alert("Product not found in Open Food Facts database.");
+      initCamera();
+    }
+  } catch (error) {
+    alert("Network error fetching barcode data.");
+    console.error(error);
+    initCamera();
+  } finally {
+    if(viewReport.classList.contains('hidden')) loadingOverlay.classList.add('hidden'); // if reverted early
+  }
+}
+
+// b) OCR Flow
 captureBtn.addEventListener('click', async () => {
-  if (!mediaStream) return;
+  if (currentMode !== 'ocr' || !mediaStream) return;
   
   // Snap the frame to hidden canvas
   const context = snapshotCanvas.getContext('2d');
@@ -72,6 +162,7 @@ captureBtn.addEventListener('click', async () => {
   stopCamera(); // Save battery
   switchView('view-report'); // Switch immediately
   topHeader.classList.add('hidden'); // Hide header during loading
+  loadingMsg.innerText = "Extracting text via AI...";
   loadingOverlay.classList.remove('hidden');
   
   try {
@@ -86,14 +177,13 @@ captureBtn.addEventListener('click', async () => {
     console.error("OCR Failed:", err);
     alert("Failed to read text. Please try again in better lighting.");
     initCamera();
-  } finally {
-    loadingOverlay.classList.add('hidden');
   }
 });
 
 // --- 3. Offline Heuristic Analysis ---
 function analyzeIngredients(rawText) {
-  const text = rawText.toLowerCase().replace(/\s+/g, ' '); // Normalize
+  loadingOverlay.classList.add('hidden'); // Done loading!
+  const text = (rawText || "").toLowerCase().replace(/\s+/g, ' '); // Normalize
   
   let score = 100;
   let additivesCount = 0;

@@ -121,8 +121,33 @@ body {
   top: 20px; left: 20px; right: 20px;
   display: flex;
   justify-content: space-between;
+  align-items: center;
   z-index: 10;
 }
+
+.camera-mode-toggle {
+  background: rgba(0,0,0,0.6);
+  border-radius: 20px;
+  display: flex;
+  padding: 4px;
+}
+
+.mode-btn {
+  background: transparent; border: none; color: #fff;
+  font-family: var(--font-body); font-weight: 600; font-size: 0.8rem;
+  padding: 6px 12px; border-radius: 16px; cursor: pointer;
+  transition: background 0.2s;
+  display: flex; gap: 6px; align-items: center;
+}
+
+.mode-btn.active-mode {
+  background: var(--accent-primary);
+}
+
+#barcodeReader {
+  width: 100%; position: absolute; top: 0; left: 0; height: 100%;
+}
+#barcodeReader video { object-fit: cover !important; }
 
 .camera-instructions {
   position: absolute;
