@@ -3,81 +3,97 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
-  <title>Food Truth Scanner</title>
+  <title>Food Truth</title>
   
-  <!-- Modern Typography -->
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@500;600;700;800&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
   
   <link rel="stylesheet" href="app.css">
-  
-  <!-- Icons -->
   <link href="https://cdn.jsdelivr.net/npm/remixicon@3.5.0/fonts/remixicon.css" rel="stylesheet">
   
-  <!-- PWA Manifest -->
   <link rel="manifest" href="manifest.json">
-  <meta name="theme-color" content="#4ade80">
+  <meta name="theme-color" content="#ffffff">
   <link rel="apple-touch-icon" href="https://via.placeholder.com/192x192.png?text=Icon192">
 </head>
 <body>
   <div id="app-container" class="mobile-app">
     
-    <!-- View 1: Main Search & Scanner -->
-    <section id="view-home" class="view active-view">
-      <header class="app-header">
-        <h1>Truth <span class="accent-text">Scanner</span></h1>
-        <p class="subtitle">Discover what's really in your food</p>
-      </header>
+    <header class="app-top-header hidden" id="topHeader">
+      <button id="backBtn" class="icon-btn round-btn"><i class="ri-arrow-left-s-line"></i></button>
+      <h2 id="headerTitle" style="font-family: 'Outfit', sans-serif;">Results</h2>
+      <button class="icon-btn round-btn"><i class="ri-heart-3-line"></i></button>
+    </header>
 
-
-
-      <div class="scanner-launcher">
-        <div class="scanner-btn" id="startScanBtn">
-          <div class="scan-ring">
-            <i class="ri-barcode-box-line"></i>
-          </div>
-          <span>Tap to Scan Barcode</span>
+    <!-- View 1: Camera Scanner -->
+    <section id="view-camera" class="view active-view" style="padding: 0;">
+      <div class="camera-wrapper">
+        <video id="cameraSource" autoplay playsinline></video>
+        
+        <div class="camera-overlay-top">
+          <button class="icon-btn close-cam round-btn-dark"><i class="ri-close-line"></i></button>
+          <button class="icon-btn flash-cam round-btn-dark"><i class="ri-flashlight-fill"></i></button>
         </div>
-      </div>
 
-      <div id="scanner-modal" class="modal hidden">
-        <div class="modal-content glass-panel">
-          <button id="closeScannerBtn" class="close-btn"><i class="ri-close-line"></i></button>
-          <h2>Scan Product Barcode</h2>
-          <div id="reader"></div>
-          <p class="scanner-hint">Align barcode within the frame</p>
+        <div class="camera-instructions">
+          <span class="badge-feature"><i class="ri-sparkle-fill" style="color: #facc15;"></i> NEW FEATURE</span>
+          <p>Take a photo of the ingredients to get your scan result</p>
+        </div>
+
+        <div class="shutter-container">
+          <button id="captureBtn" class="shutter-btn">
+            <div class="shutter-inner"></div>
+          </button>
         </div>
       </div>
     </section>
 
     <!-- View 2: Analysis Report -->
     <section id="view-report" class="view hidden">
-      <header class="report-header">
-        <button id="backBtn" class="icon-btn"><i class="ri-arrow-left-line"></i></button>
-        <h2>Health Report</h2>
-        <div class="placeholder"></div>
-      </header>
-
       <div id="report-content" class="report-content">
         <!-- Rendered dynamically -->
       </div>
     </section>
 
+    <!-- Bottom Navigation Bar -->
+    <nav class="bottom-nav" id="bottomNav">
+      <div class="nav-item">
+        <i class="ri-home-5-line"></i>
+        <span>Home</span>
+      </div>
+      <div class="nav-item active-nav" id="navScanBtn" onclick="initCamera()">
+        <i class="ri-camera-fill text-green"></i>
+        <span class="text-green">Scan</span>
+      </div>
+      <div class="nav-item">
+        <i class="ri-search-line"></i>
+        <span>Explore</span>
+      </div>
+      <div class="nav-item">
+        <i class="ri-user-3-line"></i>
+        <span>Me</span>
+      </div>
+    </nav>
+
     <!-- Loading Overlay -->
-    <div id="loadingOverlay" class="loading-overlay hidden glass-panel">
-      <div class="spinner"></div>
-      <p id="loadingMsg">Analyzing Product...</p>
+    <div id="loadingOverlay" class="loading-overlay hidden">
+      <div class="ocr-spinner">
+        <i class="ri-scan-2-line"></i>
+        <div class="scan-line"></div>
+      </div>
+      <h3 style="font-family:'Outfit'">Analyzing Photo...</h3>
+      <p id="loadingMsg">Extracting text via AI</p>
     </div>
+
+    <!-- Hidden Canvas for Snapshot -->
+    <canvas id="snapshotCanvas" class="hidden"></canvas>
   </div>
 
-  <!-- Barcode Scanner Library -->
-  <script src="https://unpkg.com/html5-qrcode" type="text/javascript"></script>
+  <!-- Tesseract OCR Library -->
+  <script src='https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js'></script>
   
-  <!-- App Logic -->
   <script src="app.js"></script>
 
-  <!-- Service Worker Registration for PWA -->
   <script>
     if ('serviceWorker' in navigator) {
       window.addEventListener('load', () => {

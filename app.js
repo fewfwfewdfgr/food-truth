@@ -1,286 +1,255 @@
-// Food Truth Scanner Logic
-// Manages strictly UI State, Open Food Facts API calls, and the Ethical/Health interpretation engine
-
-// Setup HTML5 Barcode Reader
-let html5QrcodeScanner = null;
+// --- Modern OCR Ingredient Scanner App Logic ---
 
 // DOM Elements
-const viewHome = document.getElementById('view-home');
+const viewCamera = document.getElementById('view-camera');
 const viewReport = document.getElementById('view-report');
+const topHeader = document.getElementById('topHeader');
 
-const startScanBtn = document.getElementById('startScanBtn');
-const scannerModal = document.getElementById('scanner-modal');
-const closeScannerBtn = document.getElementById('closeScannerBtn');
+const cameraSource = document.getElementById('cameraSource');
+const snapshotCanvas = document.getElementById('snapshotCanvas');
+const captureBtn = document.getElementById('captureBtn');
 const loadingOverlay = document.getElementById('loadingOverlay');
 const reportContent = document.getElementById('report-content');
 const backBtn = document.getElementById('backBtn');
 
-// --- 1. State Management ---
+let mediaStream = null;
+
+// --- 1. View & Camera Management ---
 function switchView(viewId) {
   document.querySelectorAll('.view').forEach(v => v.classList.add('hidden'));
   document.getElementById(viewId).classList.remove('hidden');
-}
-
-function showLoading(msg) {
-  document.getElementById('loadingMsg').innerText = msg;
-  loadingOverlay.classList.remove('hidden');
-}
-
-function hideLoading() {
-  loadingOverlay.classList.add('hidden');
-}
-
-
-
-// --- 3. Barcode Scanner ---
-startScanBtn.addEventListener('click', async () => {
-  // Explicitly prompt the Android/iOS OS for camera permissions first
-  try {
-    const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "environment" } });
-    // Instantly stop the stream since we just needed to trigger the permission prompt
-    stream.getTracks().forEach(track => track.stop());
-  } catch (err) {
-    alert("Camera permission is required to scan barcodes. Please enable it in your phone settings.");
-    console.warn("Camera access denied or unavailable:", err);
-    return; // Stop the scanner from opening if permission is denied
-  }
-
-  scannerModal.classList.remove('hidden');
-  html5QrcodeScanner = new Html5Qrcode("reader");
-  html5QrcodeScanner.start(
-    { facingMode: "environment" },
-    { fps: 10, qrbox: { width: 250, height: 250 } },
-    (decodedText) => {
-      // On success
-      if (html5QrcodeScanner.isProcessing) return;
-      html5QrcodeScanner.isProcessing = true;
-      
-      // Add a 500ms delay so scanning isn't jarringly instant and freezing
-      setTimeout(() => {
-        html5QrcodeScanner.stop().then(() => {
-          html5QrcodeScanner.isProcessing = false;
-          scannerModal.classList.add('hidden');
-          fetchProductDetails(decodedText);
-        });
-      }, 500);
-    },
-    (errorMessage) => {
-      // Ignored to avoid cluttering console
-    }
-  ).catch(err => console.error("Camera error:", err));
-});
-
-closeScannerBtn.addEventListener('click', () => {
-  if(html5QrcodeScanner) html5QrcodeScanner.stop();
-  scannerModal.classList.add('hidden');
-});
-
-// --- 4. Deep Product Fetch & Scoring Engine ---
-async function fetchProductDetails(barcode) {
-  showLoading('Analyzing ingredients...');
   
+  if(viewId === 'view-report') {
+    topHeader.classList.remove('hidden');
+  } else {
+    topHeader.classList.add('hidden');
+  }
+}
+
+async function initCamera() {
+  switchView('view-camera');
+  if (mediaStream) return; // already running
+
   try {
-    const res = await fetch(`https://world.openfoodfacts.org/api/v0/product/${barcode}.json`);
-    const data = await res.json();
-    
-    if (data.status === 1) {
-      const product = data.product;
-      const report = generateReport(product);
-      renderReport(report);
-      switchView('view-report');
-    } else {
-      alert("Product not found in Open Food Facts database.");
-    }
+    mediaStream = await navigator.mediaDevices.getUserMedia({ 
+      video: { facingMode: "environment", focusMode: "continuous" } 
+    });
+    cameraSource.srcObject = mediaStream;
   } catch (err) {
-    alert("Error fetching product data.");
+    alert("Camera access is required for OCR scanning.");
     console.error(err);
+  }
+}
+
+function stopCamera() {
+  if (mediaStream) {
+    mediaStream.getTracks().forEach(track => track.stop());
+    mediaStream = null;
+  }
+}
+
+// Start camera initially
+window.addEventListener('load', initCamera);
+
+// Back to camera
+backBtn.addEventListener('click', () => {
+  reportContent.innerHTML = '';
+  initCamera();
+});
+
+// --- 2. Snapshot & Tesseract OCR ---
+captureBtn.addEventListener('click', async () => {
+  if (!mediaStream) return;
+  
+  // Snap the frame to hidden canvas
+  const context = snapshotCanvas.getContext('2d');
+  snapshotCanvas.width = cameraSource.videoWidth;
+  snapshotCanvas.height = cameraSource.videoHeight;
+  context.drawImage(cameraSource, 0, 0, snapshotCanvas.width, snapshotCanvas.height);
+  
+  const imageDataURL = snapshotCanvas.toDataURL('image/jpeg');
+  
+  stopCamera(); // Save battery
+  switchView('view-report'); // Switch immediately
+  topHeader.classList.add('hidden'); // Hide header during loading
+  loadingOverlay.classList.remove('hidden');
+  
+  try {
+    // Run offline OCR
+    const worker = await Tesseract.createWorker('eng');
+    const { data: { text } } = await worker.recognize(imageDataURL);
+    await worker.terminate();
+    
+    // Process text
+    analyzeIngredients(text);
+  } catch (err) {
+    console.error("OCR Failed:", err);
+    alert("Failed to read text. Please try again in better lighting.");
+    initCamera();
   } finally {
-    hideLoading();
+    loadingOverlay.classList.add('hidden');
   }
-}
+});
 
-// --- 5. Health & Ethical Interpretation Engine ---
-// --- 5. Custom Health & Ingredient Engine ---
-function generateReport(product) {
-  const pName = product.product_name || "Unknown Product";
-  const pBrand = product.brands || "Unknown Brand";
-  const pImg = product.image_url || 'https://via.placeholder.com/150';
+// --- 3. Offline Heuristic Analysis ---
+function analyzeIngredients(rawText) {
+  const text = rawText.toLowerCase().replace(/\s+/g, ' '); // Normalize
   
-  let healthScore = 100;
-  let ecoScore = 100;
-  let plasticScore = 100;
-  let explanations = [];
+  let score = 100;
+  let additivesCount = 0;
+  let hasSeedOil = false;
+  let totalNum = (text.match(/,/g) || []).length + 1; // rough estimate based on commas
+  if (totalNum < 3) totalNum = 3; // base minimum
   
-  const ingredients = (product.ingredients_text || "").toLowerCase();
-  
-  // --- Deep Ingredient Check (Gut Health, Acne, Bloating, Mental, Addiction) ---
+  let flagged = []; // To populate horizontal cards
 
-  // 1. Gut Health Modulators (Emulsifiers, Artificial Sweeteners, Gums)
-  const gutKillers = ['emulsifier', 'lecithin', 'maltodextrin', 'sucralose', 'aspartame', 'carrageenan', 'polysorbate'];
-  let foundGutKillers = gutKillers.filter(i => ingredients.includes(i));
-  if (foundGutKillers.length > 0) {
-    healthScore -= (foundGutKillers.length * 10);
-    explanations.push({type: 'health', text: `Gut Health Warning: Contains ${foundGutKillers.join(', ')} which may disrupt the gut microbiome and cause inflammation.`, icon: "ri-virus-line", level: "bad"});
-  }
+  // --- Dictionary ---
+  const seedOils = [
+    { name: 'Sunflower Oil', term: 'sunflower oil' },
+    { name: 'Soybean Oil', term: 'soybean oil' },
+    { name: 'Canola Oil', term: 'canola oil' },
+    { name: 'Vegetable Oil', term: 'vegetable oil' },
+    { name: 'Palm Oil', term: 'palm oil' }
+  ];
 
-  // 2. Acne Triggers (Dairy, Whey, Cocoa butter, high sugar)
-  const acneTriggers = ['milk', 'whey', 'dairy', 'cocoa butter', 'butterfat', 'sugar', 'syrup'];
-  let foundAcne = acneTriggers.filter(i => ingredients.includes(i));
-  if (foundAcne.length >= 2) {
-    healthScore -= 15;
-    explanations.push({type: 'health', text: `Acne Risk: High combination of dairy/fats/sugars (${foundAcne.slice(0,3).join(', ')}) strongly linked to sebum overproduction and skin breakouts.`, icon: "ri-star-smile-line", level: "bad"});
-  }
+  const additives = [
+    { name: 'Carrageenan (E407)', term: 'carrageenan', purpose: 'Thickener or stabiliser used to improve texture. Linked to gut inflammation.', riskClass: 'risk-med', riskText: 'Moderate risk' },
+    { name: 'Guar gum (E412)', term: 'guar gum', purpose: 'Thickener used to improve texture in dairy and sauces.', riskClass: 'risk-good', riskText: 'Low risk' },
+    { name: 'Mono-/Diglycerides', term: 'glycerides', purpose: 'Emulsifier that helps oil and water mix.', riskClass: 'risk-med', riskText: 'Moderate risk' },
+    { name: 'Maltodextrin', term: 'maltodextrin', purpose: 'Cheap carbohydrate filler. Spikes blood sugar wildly.', riskClass: 'risk-bad', riskText: 'High risk' },
+    { name: 'Sucralose', term: 'sucralose', purpose: 'Artificial sweetener linked to microbiome damage.', riskClass: 'risk-bad', riskText: 'High risk' },
+    { name: 'Aspartame', term: 'aspartame', purpose: 'Artificial sweetener, highly controversial neurological effects.', riskClass: 'risk-bad', riskText: 'High risk' },
+    { name: 'Red 40 Dye', term: 'red 40', purpose: 'Artificial colorant linked to hyperactivity in children.', riskClass: 'risk-bad', riskText: 'High risk' },
+    { name: 'Soy Lecithin', term: 'lecithin', purpose: 'Emulsifier extracted using hexane.', riskClass: 'risk-med', riskText: 'Moderate risk' }
+  ];
 
-  // 3. Face Bloating (High sodium, refined carbs, starches)
-  const bloatTriggers = ['salt', 'sodium', 'flour', 'starch', 'wheat', 'syrup'];
-  let foundBloat = bloatTriggers.filter(i => ingredients.includes(i));
-  if (foundBloat.length >= 2) {
-    healthScore -= 10;
-    explanations.push({type: 'health', text: `Face Bloating Risk: Contains water-retaining ingredients (${foundBloat.slice(0,3).join(', ')}). Leads to facial puffiness.`, icon: "ri-bubble-chart-line", level: "med"});
-  }
-
-  // 4. Mental Effects (Brain fog, crashes, artificial dyes, seed oils)
-  const mentalToxins = ['color', 'dye', 'red 40', 'yellow 5', 'sunflower oil', 'soybean oil', 'canola oil', 'preservative'];
-  let foundMental = mentalToxins.filter(i => ingredients.includes(i));
-  if (foundMental.length > 0) {
-    healthScore -= 15;
-    explanations.push({type: 'health', text: `Mental Fog / Lethargy: Contains ${foundMental.join(', ')}. Linked to energy crashes, brain fog, and neuro-inflammation.`, icon: "ri-brain-line", level: "bad"});
-  }
-
-  // 5. Addictiveness (Hyper-palatability combo: Sugar + Fat + Salt + MSG/Caffeine)
-  const isSugary = ingredients.includes('sugar') || ingredients.includes('syrup');
-  const isFatty = ingredients.includes('oil') || ingredients.includes('fat') || ingredients.includes('butter');
-  const isSalty = ingredients.includes('salt') || ingredients.includes('sodium');
-  const hasMsg = ingredients.includes('glutamate') || ingredients.includes('msg') || ingredients.includes('caffeine');
-  
-  if ((isSugary && isFatty) || hasMsg) {
-    healthScore -= 20;
-    explanations.push({type: 'health', text: `Highly Addictive Formula: Engineered combination of ${hasMsg ? 'stimulants/excitotoxins' : 'sugar and fat'} designed to hijack dopamine receptors and induce cravings.`, icon: "ri-dossier-line", level: "bad"});
-  }
-  
-  // Good ingredient checking
-  if (!ingredients.includes('sugar') && !ingredients.includes('syrup') && !ingredients.includes('oil') && !foundGutKillers.length && ingredients.length > 5) {
-    explanations.push({type: 'health', text: "Clean profile: No major systemic inflammatory triggers detected.", icon: "ri-shield-check-line", level: "good"});
-  }
-
-  // Additives general count penalty
-  if (product.additives_n > 3) {
-    healthScore -= 15;
-    explanations.push({type: 'health', text: `Contains ${product.additives_n} chemical additives.`, icon: "ri-alert-line", level: "bad"});
-  }
-
-  // Eco-Score & Ethical Simulation
-  const eco = product.ecoscore_grade || 'unknown';
-  if (eco === 'e' || eco === 'd') {
-    ecoScore -= 40;
-    explanations.push({type: 'ethical', text: "High environmental footprint and intensive resource extraction.", icon: "ri-earth-line", level: "bad"});
-  } else if (eco === 'a' || eco === 'b') {
-    explanations.push({type: 'ethical', text: "Lower environmental footprint.", icon: "ri-earth-line", level: "good"});
-  } else {
-    ecoScore -= 20;
-    explanations.push({type: 'ethical', text: "Low corporate transparency.", icon: "ri-question-mark", level: "med"});
-  }
-
-  // Microplastics Risk Simulation
-  const packaging = (product.packaging || "").toLowerCase();
-  if (packaging.includes('plastic')) {
-    plasticScore -= 40;
-    explanations.push({type: 'plastic', text: "Medium exposure risk to micro/nano-plastics (Packaged in plastic).", icon: "ri-drop-line", level: "med"});
-  } else if (packaging.includes('glass') || packaging.includes('paper')) {
-    explanations.push({type: 'plastic', text: "Negligible microplastic leaching probability.", icon: "ri-drop-fill", level: "good"});
-  } else {
-    plasticScore -= 10;
-  }
-
-  // Bound scores
-  if (healthScore < 0) healthScore = 0;
-  if (ecoScore < 0) ecoScore = 0;
-  if (plasticScore < 0) plasticScore = 0;
-
-  // Calculate overall average
-  let score = Math.round((healthScore + ecoScore + plasticScore) / 3);
-
-  return { name: pName, brand: pBrand, img: pImg, score, healthScore, ecoScore, plasticScore, explanations };
-}
-
-function getScoreClass(s) {
-  if (s < 40) return 'text-bad';
-  if (s < 70) return 'text-med';
-  return 'text-good';
-}
-
-// --- 6. Report Rendering ---
-function renderReport(report) {
-  let scoreClass = 'bg-good';
-  let colorHex = '#4ade80';
-  if (report.score < 40) { scoreClass = 'bg-bad'; colorHex = '#ef4444'; }
-  else if (report.score < 70) { scoreClass = 'bg-med'; colorHex = '#facc15'; }
-
-  let healthHTML = ''; let ethicalHTML = ''; let plasticHTML = '';
-  
-  report.explanations.forEach(exp => {
-    const item = `
-      <li class="fact-item">
-        <i class="${exp.icon} text-${exp.level}"></i>
-        <span>${exp.text}</span>
-      </li>
-    `;
-    if(exp.type === 'health') healthHTML += item;
-    if(exp.type === 'ethical') ethicalHTML += item;
-    if(exp.type === 'plastic') plasticHTML += item;
+  // Analysis
+  seedOils.forEach(oil => {
+    if (text.includes(oil.term) || text.includes(oil.term.replace(' oil', ''))) {
+      hasSeedOil = true;
+      score -= 15;
+      flagged.push({ name: oil.name, purpose: 'Highly refined inflammatory seed oil.', riskClass: 'risk-bad', riskText: 'High risk', cat: 'SEED OIL' });
+    }
   });
 
-  if(!healthHTML) healthHTML = '<li class="fact-item">No significant health data available.</li>';
-  if(!ethicalHTML) ethicalHTML = '<li class="fact-item">No significant corporate intelligence available.</li>';
-  if(!plasticHTML) plasticHTML = '<li class="fact-item">No verified packaging data.</li>';
+  additives.forEach(add => {
+    if (text.includes(add.term)) {
+      additivesCount++;
+      if(add.riskClass === 'risk-bad') score -= 20;
+      else if(add.riskClass === 'risk-med') score -= 10;
+      else if(add.riskClass === 'risk-good') score -= 2;
+      
+      flagged.push({ name: add.name, purpose: add.purpose, riskClass: add.riskClass, riskText: add.riskText, cat: 'ADDITIVE / KILLER' });
+    }
+  });
 
-  reportContent.innerHTML = `
-    <div class="product-hero">
-      <img src="${report.img}" alt="${report.name}" class="product-image">
-      <h3>${report.name}</h3>
-      <p class="subtitle" style="margin-top:4px;">${report.brand}</p>
-    </div>
+  // Natural Triggers
+  if(text.includes('msg') || text.includes('glutamate')) {
+    score -= 15;
+    flagged.push({ name: 'Monosodium Glutamate', purpose: 'Excitotoxin flavor enhancer linked to addiction/headaches.', riskClass: 'risk-bad', riskText: 'High risk', cat: 'ENHANCER' });
+  }
 
-    <div class="score-container">
-      <div class="score-circle ${scoreClass}" style="box-shadow: 0 0 40px ${colorHex}40;">
-        <span class="number">${report.score}</span>
-        <span class="label">OVERALL</span>
-      </div>
-    </div>
+  // General evaluation
+  if (score < 10) score = 10;
+  
+  let gradeText = "Excellent";
+  let gradeClass = "bg-risk-good";
+  if (score < 40) { gradeText = "Poor"; gradeClass = "bg-risk-bad"; }
+  else if (score < 75) { gradeText = "Fair"; gradeClass = "bg-risk-med"; }
 
-    <div class="sub-scores">
-      <div class="sub-score-item">
-        <span class="sub-val ${getScoreClass(report.healthScore)}">${report.healthScore}</span>
-        <span class="sub-label">Health</span>
-      </div>
-      <div class="sub-score-item">
-        <span class="sub-val ${getScoreClass(report.ecoScore)}">${report.ecoScore}</span>
-        <span class="sub-label">Environment</span>
-      </div>
-      <div class="sub-score-item">
-        <span class="sub-val ${getScoreClass(report.plasticScore)}">${report.plasticScore}</span>
-        <span class="sub-label">Packaging</span>
-      </div>
-    </div>
+  const isUltraProcessed = (additivesCount > 0 || hasSeedOil) ? 'Yes (NOVA 4)' : 'No';
+  const processClass = isUltraProcessed === 'No' ? 'text-good' : 'text-bad';
 
-    <div class="card glass-panel ${scoreClass}" style="background-image: none;">
-      <div class="card-header"><i class="ri-heart-pulse-fill"></i> Health Interpretation</div>
-      <ul class="fact-list">${healthHTML}</ul>
-    </div>
-
-    <div class="card glass-panel">
-      <div class="card-header"><i class="ri-eye-line text-med"></i> Corporate Intelligence</div>
-      <ul class="fact-list">${ethicalHTML}</ul>
-    </div>
-
-    <div class="card glass-panel">
-      <div class="card-header"><i class="ri-flask-line text-bad"></i> Microplastics Risk</div>
-      <ul class="fact-list">${plasticHTML}</ul>
-    </div>
-  `;
+  renderReport({
+    score, gradeText, gradeClass,
+    additivesCount, hasSeedOil, totalNum,
+    isUltraProcessed, processClass,
+    flagged
+  });
 }
 
-// Controls
-backBtn.addEventListener('click', () => {
-  switchView('view-home');
-});
+// --- 4. Render UI ---
+function renderReport(data) {
+  topHeader.classList.remove('hidden');
+
+  let cardsHTML = '';
+  data.flagged.forEach(f => {
+    cardsHTML += `
+      <div class="flashcard border-${f.riskClass}">
+        <span class="card-risk bg-${f.riskClass}">${f.riskText}</span>
+        <h4>${f.name}</h4>
+        <p>${f.purpose}</p>
+        <span class="category">${f.cat}</span>
+      </div>
+    `;
+  });
+
+  if (cardsHTML === '') {
+    cardsHTML = `
+      <div class="flashcard border-risk-good">
+        <span class="card-risk bg-risk-good">Clean</span>
+        <h4>Whole Foods Only</h4>
+        <p>No major artificial additives or inflammatory triggers detected by OCR.</p>
+        <span class="category">SAFE</span>
+      </div>
+    `;
+  }
+
+  // Mocking brand trust logic just for display based on the UI screenshot
+  // In a real app, we'd OCR the brand name on the front of the packet.
+  const brandHTML = `
+    <div class="brand-card">
+      <div class="brand-card-top">
+        <span class="title"><i class="ri-shield-keyhole-fill"></i> Brand Trust Score</span>
+        <span class="brand-badge border-risk-med">Orange</span>
+      </div>
+      <div class="brand-card-mid">
+        <h3>Detected Brand</h3>
+        <span class="lawsuit-tag">Lawsuit</span>
+      </div>
+      <p class="brand-fact"><i class="ri-information-fill"></i> Environmental / Labor flags detected in history</p>
+      <span class="learn-more">Learn more <i class="ri-arrow-right-s-line"></i></span>
+    </div>
+  `;
+
+  reportContent.innerHTML = `
+    <h3 class="product-title" style="margin-top: 10px;">Scanned Product</h3>
+    
+    <div class="grade-card ${data.gradeClass.replace('bg-', 'bg-').replace('risk-', '')}-light">
+      <div class="grade-circle ${data.gradeClass}">
+        <span class="num">${data.score}</span>
+        <span class="denom">/100</span>
+      </div>
+      <div class="grade-text">
+        <h3 class="${data.gradeClass.replace('bg-', 'text-')}">${data.gradeText}</h3>
+        <p>Health Grade</p>
+      </div>
+    </div>
+
+    <h4 class="section-title">Quick Overview</h4>
+    <div class="overview-list">
+      <div class="overview-item">
+        <span class="overview-label"><i class="ri-alert-fill"></i> Harmful additives</span>
+        <span class="overview-val ${data.additivesCount > 0 ? 'text-med' : 'text-good'}">${data.additivesCount} <span class="dot-${data.additivesCount > 0 ? 'med' : 'good'}"></span></span>
+      </div>
+      <div class="overview-item">
+        <span class="overview-label"><i class="ri-drop-fill"></i> Seed oil</span>
+        <span class="overview-val ${data.hasSeedOil ? 'text-bad' : 'text-good'}">${data.hasSeedOil ? 'Yes' : 'No'} <span class="dot-${data.hasSeedOil ? 'bad' : 'good'}"></span></span>
+      </div>
+      <div class="overview-item">
+        <span class="overview-label"><i class="ri-list-check"></i> Total Ingredients</span>
+        <span class="overview-val text-good">~${data.totalNum} <span class="dot-good"></span></span>
+      </div>
+      <div class="overview-item">
+        <span class="overview-label"><i class="ri-settings-4-fill"></i> Ultra Processed</span>
+        <span class="overview-val ${data.processClass}">${data.isUltraProcessed} <span class="dot-${data.isUltraProcessed === 'No' ? 'good' : 'bad'}"></span></span>
+      </div>
+    </div>
+
+    <div class="flashcards-scroll">
+      ${cardsHTML}
+    </div>
+
+    ${brandHTML}
+  `;
+}
