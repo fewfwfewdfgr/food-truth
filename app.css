@@ -353,6 +353,38 @@ body {
 .score-circle .number { font-size: 3rem; font-weight: 800; line-height: 1; }
 .score-circle .label { font-size: 0.8rem; text-transform: uppercase; letter-spacing: 1px; color: rgba(255,255,255,0.7); }
 
+.sub-scores {
+  display: flex;
+  justify-content: space-between;
+  margin-bottom: 24px;
+  gap: 12px;
+}
+
+.sub-score-item {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  background: var(--surface-color);
+  border: 1px solid var(--surface-border);
+  padding: 12px;
+  border-radius: 16px;
+  flex: 1;
+}
+
+.sub-score-item .sub-val {
+  font-family: var(--font-heading);
+  font-size: 1.5rem;
+  font-weight: 700;
+}
+
+.sub-score-item .sub-label {
+  font-size: 0.65rem;
+  color: var(--text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  margin-top: 4px;
+}
+
 .card {
   padding: 20px;
   margin-bottom: 16px;

@@ -97,10 +97,17 @@ startScanBtn.addEventListener('click', async () => {
     { fps: 10, qrbox: { width: 250, height: 250 } },
     (decodedText) => {
       // On success
-      html5QrcodeScanner.stop().then(() => {
-        scannerModal.classList.add('hidden');
-        fetchProductDetails(decodedText);
-      });
+      if (html5QrcodeScanner.isProcessing) return;
+      html5QrcodeScanner.isProcessing = true;
+      
+      // Add a 500ms delay so scanning isn't jarringly instant and freezing
+      setTimeout(() => {
+        html5QrcodeScanner.stop().then(() => {
+          html5QrcodeScanner.isProcessing = false;
+          scannerModal.classList.add('hidden');
+          fetchProductDetails(decodedText);
+        });
+      }, 500);
     },
     (errorMessage) => {
       // Ignored to avoid cluttering console
@@ -145,57 +152,75 @@ function generateReport(product) {
   const pBrand = product.brands || "Unknown Brand";
   const pImg = product.image_url || 'https://via.placeholder.com/150';
   
-  let score = 100;
+  let healthScore = 100;
+  let ecoScore = 100;
+  let plasticScore = 100;
   let explanations = [];
   
   // Nutri-Score Penalty
   const nutri = product.nutriscore_grade || 'unknown';
-  if (nutri === 'e') { score -= 30; explanations.push({type: 'health', text: "Very poor nutritional profile (Nutri-Score E). Linked to higher metabolic risks.", icon: "ri-heart-pulse-fill", level: "bad"}); }
-  else if (nutri === 'd') { score -= 20; explanations.push({type: 'health', text: "High in sugar, salt, or saturated fats.", icon: "ri-heart-pulse-line", level: "bad"}); }
-  else if (nutri === 'c') { score -= 10; explanations.push({type: 'health', text: "Moderate nutritional profile.", icon: "ri-heart-pulse-line", level: "med"}); }
+  if (nutri === 'e') { healthScore -= 30; explanations.push({type: 'health', text: "Very poor nutritional profile (Nutri-Score E). Linked to higher metabolic risks.", icon: "ri-heart-pulse-fill", level: "bad"}); }
+  else if (nutri === 'd') { healthScore -= 20; explanations.push({type: 'health', text: "High in sugar, salt, or saturated fats.", icon: "ri-heart-pulse-line", level: "bad"}); }
+  else if (nutri === 'c') { healthScore -= 10; explanations.push({type: 'health', text: "Moderate nutritional profile.", icon: "ri-heart-pulse-line", level: "med"}); }
   else if (nutri === 'a' || nutri === 'b') { explanations.push({type: 'health', text: "Good nutritional profile (whole foods or balanced).", icon: "ri-heart-pulse-line", level: "good"}); }
 
   // Nova Group (Processing)
   const nova = product.nova_group;
   if (nova === 4) {
-    score -= 25;
+    healthScore -= 25;
     explanations.push({type: 'health', text: "Ultra-processed product. Contains cosmetic additives. Associated with negative long-term health concerns.", icon: "ri-test-tube-line", level: "bad"});
   } else if (nova === 1) {
-    score += 5; // Whole food bonus
-    if(score > 100) score = 100;
+    healthScore += 5; // Whole food bonus
+    if(healthScore > 100) healthScore = 100;
     explanations.push({type: 'health', text: "Unprocessed or minimally processed whole food.", icon: "ri-leaf-line", level: "good"});
+  }
+
+  // Additives
+  if (product.additives_n > 5) {
+    healthScore -= 15;
+    explanations.push({type: 'health', text: `Contains ${product.additives_n} additives (High). Potential combination effects unknown.`, icon: "ri-alert-line", level: "bad"});
+  } else if (product.additives_n > 0) {
+    healthScore -= 5;
   }
 
   // Eco-Score & Ethical Simulation
   const eco = product.ecoscore_grade || 'unknown';
   if (eco === 'e' || eco === 'd') {
-    score -= 15;
+    ecoScore -= 40;
     explanations.push({type: 'ethical', text: "Higher environmental impact. Linked to intensive farming practices or high carbon footprint.", icon: "ri-earth-line", level: "bad"});
   } else if (eco === 'a' || eco === 'b') {
     explanations.push({type: 'ethical', text: "Low environmental impact.", icon: "ri-earth-line", level: "good"});
   } else {
+    ecoScore -= 20;
     explanations.push({type: 'ethical', text: "Low transparency on environmental impact and animal welfare.", icon: "ri-question-mark", level: "med"});
   }
 
   // Microplastics Risk Simulation (based on packaging)
   const packaging = (product.packaging || "").toLowerCase();
   if (packaging.includes('plastic')) {
-    score -= 10;
+    plasticScore -= 40;
     explanations.push({type: 'plastic', text: "Estimated exposure risk: Medium (Packaged in plastic).", icon: "ri-drop-line", level: "med"});
   } else if (packaging.includes('glass') || packaging.includes('paper')) {
     explanations.push({type: 'plastic', text: "Lowest microplastic probability (Non-plastic packaging).", icon: "ri-drop-fill", level: "good"});
+  } else {
+    plasticScore -= 10;
   }
 
-  // Additives
-  if (product.additives_n > 5) {
-    score -= 10;
-    explanations.push({type: 'health', text: `Contains ${product.additives_n} additives (High). Potential combination effects unknown.`, icon: "ri-alert-line", level: "bad"});
-  }
+  // Bound scores
+  if (healthScore < 0) healthScore = 0;
+  if (ecoScore < 0) ecoScore = 0;
+  if (plasticScore < 0) plasticScore = 0;
 
-  // Bound score
-  if (score < 0) score = 0;
+  // Calculate overall average
+  let score = Math.round((healthScore + ecoScore + plasticScore) / 3);
 
-  return { name: pName, brand: pBrand, img: pImg, score, explanations };
+  return { name: pName, brand: pBrand, img: pImg, score, healthScore, ecoScore, plasticScore, explanations };
+}
+
+function getScoreClass(s) {
+  if (s < 40) return 'text-bad';
+  if (s < 70) return 'text-med';
+  return 'text-good';
 }
 
 // --- 6. Report Rendering ---
@@ -233,7 +258,22 @@ function renderReport(report) {
     <div class="score-container">
       <div class="score-circle ${scoreClass}" style="box-shadow: 0 0 40px ${colorHex}40;">
         <span class="number">${report.score}</span>
-        <span class="label">/ 100</span>
+        <span class="label">OVERALL</span>
+      </div>
+    </div>
+
+    <div class="sub-scores">
+      <div class="sub-score-item">
+        <span class="sub-val ${getScoreClass(report.healthScore)}">${report.healthScore}</span>
+        <span class="sub-label">Health</span>
+      </div>
+      <div class="sub-score-item">
+        <span class="sub-val ${getScoreClass(report.ecoScore)}">${report.ecoScore}</span>
+        <span class="sub-label">Environment</span>
+      </div>
+      <div class="sub-score-item">
+        <span class="sub-val ${getScoreClass(report.plasticScore)}">${report.plasticScore}</span>
+        <span class="sub-label">Packaging</span>
       </div>
     </div>
 
