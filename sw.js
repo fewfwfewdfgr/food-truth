@@ -1,4 +1,4 @@
-const CACHE_NAME = 'food-truth-v1';
+const CACHE_NAME = 'food-truth-v4';
 const urlsToCache = [
   './',
   './index.html',
@@ -11,6 +11,7 @@ const urlsToCache = [
 
 // Install Event
 self.addEventListener('install', event => {
+  self.skipWaiting(); // Force activate new service worker immediately
   event.waitUntil(
     caches.open(CACHE_NAME)
       .then(cache => {
@@ -32,6 +33,7 @@ self.addEventListener('fetch', event => {
 
 // Activate Event (Cleanup Old Caches)
 self.addEventListener('activate', event => {
+  event.waitUntil(self.clients.claim());
   const cacheWhitelist = [CACHE_NAME];
   event.waitUntil(
     caches.keys().then(cacheNames => {

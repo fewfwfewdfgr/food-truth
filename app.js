@@ -7,8 +7,7 @@ let html5QrcodeScanner = null;
 // DOM Elements
 const viewHome = document.getElementById('view-home');
 const viewReport = document.getElementById('view-report');
-const searchInput = document.getElementById('searchInput');
-const searchResults = document.getElementById('searchResults');
+
 const startScanBtn = document.getElementById('startScanBtn');
 const scannerModal = document.getElementById('scanner-modal');
 const closeScannerBtn = document.getElementById('closeScannerBtn');
@@ -31,51 +30,7 @@ function hideLoading() {
   loadingOverlay.classList.add('hidden');
 }
 
-// --- 2. Live Search (Open Food Facts) ---
-let searchTimeout;
-searchInput.addEventListener('input', (e) => {
-  const query = e.target.value.trim();
-  clearTimeout(searchTimeout);
-  if (query.length < 3) {
-    searchResults.innerHTML = '';
-    searchResults.classList.add('hidden');
-    return;
-  }
-  
-  // Debounce API calls
-  searchTimeout = setTimeout(() => {
-    fetchSearchResults(query);
-  }, 500);
-});
 
-async function fetchSearchResults(query) {
-  try {
-    const res = await fetch(`https://world.openfoodfacts.org/cgi/search.pl?search_terms=${encodeURIComponent(query)}&search_simple=1&action=process&json=1&page_size=5`);
-    const data = await res.json();
-    renderSearchResults(data.products);
-  } catch (error) {
-    console.error("Search API error:", error);
-  }
-}
-
-function renderSearchResults(products) {
-  if (!products || products.length === 0) {
-    searchResults.innerHTML = '<div class="search-result-item"><div class="search-result-info"><p>No results found</p></div></div>';
-    searchResults.classList.remove('hidden');
-    return;
-  }
-
-  searchResults.innerHTML = products.map(p => `
-    <div class="search-result-item" onclick="fetchProductDetails('${p._id}')">
-      <img src="${p.image_thumb_url || 'https://via.placeholder.com/48?text=Food'}" alt="${p.product_name}">
-      <div class="search-result-info">
-        <h4>${p.product_name || 'Unknown Product'}</h4>
-        <p>${p.brands || 'Unknown Brand'}</p>
-      </div>
-    </div>
-  `).join('');
-  searchResults.classList.remove('hidden');
-}
 
 // --- 3. Barcode Scanner ---
 startScanBtn.addEventListener('click', async () => {
@@ -122,8 +77,6 @@ closeScannerBtn.addEventListener('click', () => {
 
 // --- 4. Deep Product Fetch & Scoring Engine ---
 async function fetchProductDetails(barcode) {
-  searchResults.classList.add('hidden');
-  searchInput.value = '';
   showLoading('Analyzing ingredients...');
   
   try {
@@ -147,6 +100,7 @@ async function fetchProductDetails(barcode) {
 }
 
 // --- 5. Health & Ethical Interpretation Engine ---
+// --- 5. Custom Health & Ingredient Engine ---
 function generateReport(product) {
   const pName = product.product_name || "Unknown Product";
   const pBrand = product.brands || "Unknown Brand";
@@ -157,51 +111,83 @@ function generateReport(product) {
   let plasticScore = 100;
   let explanations = [];
   
-  // Nutri-Score Penalty
-  const nutri = product.nutriscore_grade || 'unknown';
-  if (nutri === 'e') { healthScore -= 30; explanations.push({type: 'health', text: "Very poor nutritional profile (Nutri-Score E). Linked to higher metabolic risks.", icon: "ri-heart-pulse-fill", level: "bad"}); }
-  else if (nutri === 'd') { healthScore -= 20; explanations.push({type: 'health', text: "High in sugar, salt, or saturated fats.", icon: "ri-heart-pulse-line", level: "bad"}); }
-  else if (nutri === 'c') { healthScore -= 10; explanations.push({type: 'health', text: "Moderate nutritional profile.", icon: "ri-heart-pulse-line", level: "med"}); }
-  else if (nutri === 'a' || nutri === 'b') { explanations.push({type: 'health', text: "Good nutritional profile (whole foods or balanced).", icon: "ri-heart-pulse-line", level: "good"}); }
+  const ingredients = (product.ingredients_text || "").toLowerCase();
+  
+  // --- Deep Ingredient Check (Gut Health, Acne, Bloating, Mental, Addiction) ---
 
-  // Nova Group (Processing)
-  const nova = product.nova_group;
-  if (nova === 4) {
-    healthScore -= 25;
-    explanations.push({type: 'health', text: "Ultra-processed product. Contains cosmetic additives. Associated with negative long-term health concerns.", icon: "ri-test-tube-line", level: "bad"});
-  } else if (nova === 1) {
-    healthScore += 5; // Whole food bonus
-    if(healthScore > 100) healthScore = 100;
-    explanations.push({type: 'health', text: "Unprocessed or minimally processed whole food.", icon: "ri-leaf-line", level: "good"});
+  // 1. Gut Health Modulators (Emulsifiers, Artificial Sweeteners, Gums)
+  const gutKillers = ['emulsifier', 'lecithin', 'maltodextrin', 'sucralose', 'aspartame', 'carrageenan', 'polysorbate'];
+  let foundGutKillers = gutKillers.filter(i => ingredients.includes(i));
+  if (foundGutKillers.length > 0) {
+    healthScore -= (foundGutKillers.length * 10);
+    explanations.push({type: 'health', text: `Gut Health Warning: Contains ${foundGutKillers.join(', ')} which may disrupt the gut microbiome and cause inflammation.`, icon: "ri-virus-line", level: "bad"});
   }
 
-  // Additives
-  if (product.additives_n > 5) {
+  // 2. Acne Triggers (Dairy, Whey, Cocoa butter, high sugar)
+  const acneTriggers = ['milk', 'whey', 'dairy', 'cocoa butter', 'butterfat', 'sugar', 'syrup'];
+  let foundAcne = acneTriggers.filter(i => ingredients.includes(i));
+  if (foundAcne.length >= 2) {
     healthScore -= 15;
-    explanations.push({type: 'health', text: `Contains ${product.additives_n} additives (High). Potential combination effects unknown.`, icon: "ri-alert-line", level: "bad"});
-  } else if (product.additives_n > 0) {
-    healthScore -= 5;
+    explanations.push({type: 'health', text: `Acne Risk: High combination of dairy/fats/sugars (${foundAcne.slice(0,3).join(', ')}) strongly linked to sebum overproduction and skin breakouts.`, icon: "ri-star-smile-line", level: "bad"});
+  }
+
+  // 3. Face Bloating (High sodium, refined carbs, starches)
+  const bloatTriggers = ['salt', 'sodium', 'flour', 'starch', 'wheat', 'syrup'];
+  let foundBloat = bloatTriggers.filter(i => ingredients.includes(i));
+  if (foundBloat.length >= 2) {
+    healthScore -= 10;
+    explanations.push({type: 'health', text: `Face Bloating Risk: Contains water-retaining ingredients (${foundBloat.slice(0,3).join(', ')}). Leads to facial puffiness.`, icon: "ri-bubble-chart-line", level: "med"});
+  }
+
+  // 4. Mental Effects (Brain fog, crashes, artificial dyes, seed oils)
+  const mentalToxins = ['color', 'dye', 'red 40', 'yellow 5', 'sunflower oil', 'soybean oil', 'canola oil', 'preservative'];
+  let foundMental = mentalToxins.filter(i => ingredients.includes(i));
+  if (foundMental.length > 0) {
+    healthScore -= 15;
+    explanations.push({type: 'health', text: `Mental Fog / Lethargy: Contains ${foundMental.join(', ')}. Linked to energy crashes, brain fog, and neuro-inflammation.`, icon: "ri-brain-line", level: "bad"});
+  }
+
+  // 5. Addictiveness (Hyper-palatability combo: Sugar + Fat + Salt + MSG/Caffeine)
+  const isSugary = ingredients.includes('sugar') || ingredients.includes('syrup');
+  const isFatty = ingredients.includes('oil') || ingredients.includes('fat') || ingredients.includes('butter');
+  const isSalty = ingredients.includes('salt') || ingredients.includes('sodium');
+  const hasMsg = ingredients.includes('glutamate') || ingredients.includes('msg') || ingredients.includes('caffeine');
+  
+  if ((isSugary && isFatty) || hasMsg) {
+    healthScore -= 20;
+    explanations.push({type: 'health', text: `Highly Addictive Formula: Engineered combination of ${hasMsg ? 'stimulants/excitotoxins' : 'sugar and fat'} designed to hijack dopamine receptors and induce cravings.`, icon: "ri-dossier-line", level: "bad"});
+  }
+  
+  // Good ingredient checking
+  if (!ingredients.includes('sugar') && !ingredients.includes('syrup') && !ingredients.includes('oil') && !foundGutKillers.length && ingredients.length > 5) {
+    explanations.push({type: 'health', text: "Clean profile: No major systemic inflammatory triggers detected.", icon: "ri-shield-check-line", level: "good"});
+  }
+
+  // Additives general count penalty
+  if (product.additives_n > 3) {
+    healthScore -= 15;
+    explanations.push({type: 'health', text: `Contains ${product.additives_n} chemical additives.`, icon: "ri-alert-line", level: "bad"});
   }
 
   // Eco-Score & Ethical Simulation
   const eco = product.ecoscore_grade || 'unknown';
   if (eco === 'e' || eco === 'd') {
     ecoScore -= 40;
-    explanations.push({type: 'ethical', text: "Higher environmental impact. Linked to intensive farming practices or high carbon footprint.", icon: "ri-earth-line", level: "bad"});
+    explanations.push({type: 'ethical', text: "High environmental footprint and intensive resource extraction.", icon: "ri-earth-line", level: "bad"});
   } else if (eco === 'a' || eco === 'b') {
-    explanations.push({type: 'ethical', text: "Low environmental impact.", icon: "ri-earth-line", level: "good"});
+    explanations.push({type: 'ethical', text: "Lower environmental footprint.", icon: "ri-earth-line", level: "good"});
   } else {
     ecoScore -= 20;
-    explanations.push({type: 'ethical', text: "Low transparency on environmental impact and animal welfare.", icon: "ri-question-mark", level: "med"});
+    explanations.push({type: 'ethical', text: "Low corporate transparency.", icon: "ri-question-mark", level: "med"});
   }
 
-  // Microplastics Risk Simulation (based on packaging)
+  // Microplastics Risk Simulation
   const packaging = (product.packaging || "").toLowerCase();
   if (packaging.includes('plastic')) {
     plasticScore -= 40;
-    explanations.push({type: 'plastic', text: "Estimated exposure risk: Medium (Packaged in plastic).", icon: "ri-drop-line", level: "med"});
+    explanations.push({type: 'plastic', text: "Medium exposure risk to micro/nano-plastics (Packaged in plastic).", icon: "ri-drop-line", level: "med"});
   } else if (packaging.includes('glass') || packaging.includes('paper')) {
-    explanations.push({type: 'plastic', text: "Lowest microplastic probability (Non-plastic packaging).", icon: "ri-drop-fill", level: "good"});
+    explanations.push({type: 'plastic', text: "Negligible microplastic leaching probability.", icon: "ri-drop-fill", level: "good"});
   } else {
     plasticScore -= 10;
   }
